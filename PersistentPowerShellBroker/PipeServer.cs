@@ -62,6 +62,10 @@ public sealed class PipeServer
                 {
                     break;
                 }
+                catch (IOException) when (acceptToken.IsCancellationRequested)
+                {
+                    break;
+                }
 
                 var task = HandleConnectionAsync(server, cancellationToken);
                 lock (handlers)
