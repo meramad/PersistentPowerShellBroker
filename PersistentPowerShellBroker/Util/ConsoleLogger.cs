@@ -4,6 +4,7 @@ public sealed class ConsoleLogger
 {
     private readonly object _gate = new();
     private readonly LogLevel _minimumLevel;
+    public LogLevel MinimumLevel => _minimumLevel;
 
     public ConsoleLogger(LogLevel minimumLevel)
     {

@@ -8,6 +8,7 @@ namespace PersistentPowerShellBroker;
 
 public sealed class PipeServer
 {
+    private const int PreviewMaxLength = 1000;
     private readonly string _pipeName;
     private readonly BrokerHost _brokerHost;
     private readonly ConsoleLogger _logger;
@@ -116,17 +117,9 @@ public sealed class PipeServer
                 _logger.Debug($"request={request.Id} timeoutMs ignored in v1 ({request.TimeoutMs.Value})");
             }
 
-            _logger.Debug($"request={request.Id} kind={request.Kind} command={request.Command}");
             var response = await _brokerHost.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
             await JsonLineCodec.WriteLineAsync(pipeStream, response, cancellationToken).ConfigureAwait(false);
-
-            var preview = request.Command.Length <= 80 ? request.Command : $"{request.Command[..80]}...";
-            _logger.Info($"request={response.Id} kind={request.Kind} success={response.Success} durationMs={response.DurationMs} command=\"{preview}\"");
-            if (!response.Success || !string.IsNullOrWhiteSpace(response.Error))
-            {
-                _logger.Debug($"request={response.Id} stderr={response.Stderr}");
-                _logger.Debug($"request={response.Id} error={response.Error}");
-            }
+            LogRequest(request, response);
         }
         catch (OperationCanceledException)
         {
@@ -194,6 +187,50 @@ public sealed class PipeServer
         Error = error,
         DurationMs = 0
     };
+
+    private void LogRequest(BrokerRequest request, BrokerResponse response)
+    {
+        var clientName = string.IsNullOrWhiteSpace(request.ClientName) ? "?" : request.ClientName;
+        var clientPid = request.ClientPid?.ToString() ?? "?";
+        var commandPreview = EscapeForLog(Truncate(request.Command, PreviewMaxLength));
+        var infoLine = $"client={clientName} pid={clientPid} request={response.Id} kind={request.Kind} success={response.Success.ToString().ToLowerInvariant()} durationMs={response.DurationMs} command=\"{commandPreview}\"";
+
+        if (_logger.MinimumLevel == LogLevel.Debug)
+        {
+            var stdoutPreview = EscapeForLog(Truncate(response.Stdout, PreviewMaxLength));
+            var stderrPreview = EscapeForLog(Truncate(response.Stderr, PreviewMaxLength));
+            _logger.Debug("request.debug.begin");
+            _logger.Debug(infoLine);
+            _logger.Debug($"stdoutPreview=\"{stdoutPreview}\"");
+            _logger.Debug($"stderrPreview=\"{stderrPreview}\"");
+            _logger.Debug("request.debug.end");
+            return;
+        }
+
+        if (_logger.MinimumLevel == LogLevel.Info)
+        {
+            _logger.Info(infoLine);
+        }
+    }
+
+    private static string Truncate(string? value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxChars)
+        {
+            return value ?? string.Empty;
+        }
+
+        return $"{value[..maxChars]}...(truncated)";
+    }
+
+    private static string EscapeForLog(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
+    }
 
     private NamedPipeServerStream CreatePipeServerStream()
     {

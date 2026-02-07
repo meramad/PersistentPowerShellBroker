@@ -53,6 +53,9 @@ internal static class ProgramEntry
             return ExitCodeStartupFatal;
         }
 
+        Console.WriteLine("PersistentPowerShellBroker");
+        Console.WriteLine("\u00A9 2026 Mikl\u00F3s Ar\u00E1nyi");
+        Console.WriteLine("Experimental local automation tool");
         Console.WriteLine($"PIPE=\\\\.\\pipe\\{options.PipeName}");
         TimeSpan? idleExit = options.IdleExitMinutes.HasValue ? TimeSpan.FromMinutes(options.IdleExitMinutes.Value) : null;
         var server = new PipeServer(options.PipeName, host, logger, stopSignal, idleExit);
@@ -96,8 +99,12 @@ internal static class ProgramEntry
                         ? $"psbroker-{Guid.NewGuid():N}"
                         : value;
                     break;
-                case "--log-level":
-                    if (string.Equals(value, "info", StringComparison.OrdinalIgnoreCase))
+                case "--log-option":
+                    if (string.Equals(value, "silent", StringComparison.OrdinalIgnoreCase))
+                    {
+                        options.LogLevel = LogLevel.Silent;
+                    }
+                    else if (string.Equals(value, "info", StringComparison.OrdinalIgnoreCase))
                     {
                         options.LogLevel = LogLevel.Info;
                     }
@@ -107,7 +114,7 @@ internal static class ProgramEntry
                     }
                     else
                     {
-                        error = "Invalid --log-level. Use info or debug.";
+                        error = "Invalid --log-option. Use silent, info, or debug.";
                         return false;
                     }
 
@@ -142,7 +149,7 @@ internal static class ProgramEntry
     private sealed class ProgramOptions
     {
         public string PipeName { get; set; } = string.Empty;
-        public LogLevel LogLevel { get; set; } = LogLevel.Info;
+        public LogLevel LogLevel { get; set; } = LogLevel.Silent;
         public string? InitScriptPath { get; set; }
         public int? IdleExitMinutes { get; set; }
     }

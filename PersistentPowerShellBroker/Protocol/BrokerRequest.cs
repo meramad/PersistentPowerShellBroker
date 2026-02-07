@@ -19,4 +19,10 @@ public sealed class BrokerRequest
 
     [JsonPropertyName("timeoutMs")]
     public int? TimeoutMs { get; init; }
+
+    [JsonPropertyName("clientName")]
+    public string? ClientName { get; init; }
+
+    [JsonPropertyName("clientPid")]
+    public int? ClientPid { get; init; }
 }
