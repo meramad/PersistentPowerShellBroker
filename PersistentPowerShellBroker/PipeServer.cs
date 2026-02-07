@@ -32,28 +32,37 @@ public sealed class PipeServer
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopSignal.Token);
-        var token = linkedCts.Token;
-        using var idleTimerCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var acceptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopSignal.Token);
+        var acceptToken = acceptCts.Token;
+        using var idleTimerCts = CancellationTokenSource.CreateLinkedTokenSource(acceptToken);
         var idleTimerTask = MonitorIdleAsync(idleTimerCts.Token);
         var handlers = new HashSet<Task>();
 
         try
         {
-            while (!token.IsCancellationRequested)
+            while (!acceptToken.IsCancellationRequested)
             {
                 var server = CreatePipeServerStream();
+                using var cancelRegistration = acceptToken.Register(static state =>
+                {
+                    ((NamedPipeServerStream)state!).Dispose();
+                }, server);
+
                 try
                 {
-                    await server.WaitForConnectionAsync(token).ConfigureAwait(false);
+                    await server.WaitForConnectionAsync().ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     server.Dispose();
                     break;
                 }
+                catch (ObjectDisposedException) when (acceptToken.IsCancellationRequested)
+                {
+                    break;
+                }
 
-                var task = HandleConnectionAsync(server, token);
+                var task = HandleConnectionAsync(server, cancellationToken);
                 lock (handlers)
                 {
                     handlers.Add(task);
@@ -188,15 +197,17 @@ public sealed class PipeServer
 
     private NamedPipeServerStream CreatePipeServerStream()
     {
-        return new NamedPipeServerStream(
+        return NamedPipeServerStreamAcl.Create(
             _pipeName,
             PipeDirection.InOut,
             NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous,
-            inBufferSize: 4096,
-            outBufferSize: 4096,
-            CreatePipeSecurity());
+            4096,
+            4096,
+            CreatePipeSecurity(),
+            HandleInheritability.None,
+            (PipeAccessRights)0);
     }
 
     private static PipeSecurity CreatePipeSecurity()
