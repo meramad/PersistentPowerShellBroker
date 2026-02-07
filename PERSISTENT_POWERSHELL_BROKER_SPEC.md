@@ -49,13 +49,13 @@ This is **not WinRM/PSRemoting**. No admin rights required.
   - `<name>` uses provided name directly
 
 ### Optional args
-- `--log-level info|debug` (default: `info`)
+- `--log-option silent|info|debug` (default: `silent`)
 - `--init <path>` (optional) dot-sources a PowerShell script into the runspace on startup
 - `--idle-exit-minutes <n>` (optional; default: disabled)
 
 ### Startup output
-Broker must print exactly one line containing the final pipe path, so automation can capture it:
-- `PIPE=\\.\pipe\<pipeName>`
+Broker prints a startup banner and must always print one machine-readable pipe line:
+- `PIPE=\\.\pipe\<pipeName>` (always printed, including `silent`)
 
 Exit codes:
 - `0` normal stop
@@ -87,6 +87,8 @@ Fields:
   - if `native`: native command name (e.g., `broker.info`)
 - `args` *(object, optional)*: native args (reserved)
 - `timeoutMs` *(int, optional)*: reserved for v2; in v1 ignore or log
+- `clientName` *(string, optional)*: caller identity for broker logging
+- `clientPid` *(int, optional)*: caller process id for broker logging
 
 Example:
 ```json
@@ -170,9 +172,21 @@ Because it is the same runspace:
 ---
 
 ## Logging
-- Log startup, pipe name, request start/end, duration.
-- `info`: one-line per request (id, kind, short command preview, duration, success).
-- `debug`: include full command and full stdout/stderr in console logs.
+- Startup:
+  - Broker prints startup banner.
+  - Broker always prints `PIPE=\\.\pipe\<pipeName>`.
+- `silent`:
+  - No per-request/per-response logs.
+- `info`:
+  - One line per request:
+    - `client=<clientName or ?> pid=<clientPid or ?> request=<id> kind=<kind> success=<bool> durationMs=<n> command="<preview>"`
+- `debug`:
+  - Multi-line block per request.
+  - Includes all `info` fields plus:
+    - `stdoutPreview="<first N chars>"`
+    - `stderrPreview="<first N chars>"`
+  - Previews must be truncated (e.g., `N=1000`) and append `...(truncated)` when truncated.
+  - Never print full unbounded stdout/stderr.
 
 ---
 
@@ -211,6 +225,8 @@ Create `client/Invoke-PSBroker.ps1` with a function:
 - Parameters:
   - `-Pipe "\\.\pipe\psbroker-..."` (or a `-PipeName`)
   - `-Command <string>`
+  - `-ClientName <string>` (default: `powershell`)
+  - `-ClientPid <int>` (default: current `$PID`)
   - `-Raw` (optional: return full response object)
 - Default behavior prints only `stdout`.
 
