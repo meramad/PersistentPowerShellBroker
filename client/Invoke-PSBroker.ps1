@@ -13,6 +13,10 @@ function Invoke-PSBroker {
         [ValidateSet('powershell','native')]
         [string]$Kind = 'powershell',
 
+        [string]$ClientName = 'powershell',
+
+        [int]$ClientPid = $PID,
+
         [switch]$Raw
     )
 
@@ -29,6 +33,8 @@ function Invoke-PSBroker {
         id = [guid]::NewGuid().ToString('N')
         kind = $Kind
         command = $Command
+        clientName = $ClientName
+        clientPid = $ClientPid
     }
 
     $requestJson = ($request | ConvertTo-Json -Compress)
