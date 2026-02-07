@@ -1,0 +1,29 @@
+## Build results
+bin/
+obj/
+[Bb]uild/
+[Bb]uild[Ll]og.*
+
+## VS / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Logs
+*.log
+
+## NuGet
+packages/
+*.nupkg
+*.snupkg
+
+## Publish output
+publish/
