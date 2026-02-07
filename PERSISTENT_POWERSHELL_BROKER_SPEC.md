@@ -188,6 +188,11 @@ Because it is the same runspace:
   - Previews must be truncated (e.g., `N=1000`) and append `...(truncated)` when truncated.
   - Never print full unbounded stdout/stderr.
 
+### Logging v1.1 Compatibility Notes
+- No daemon/background behavior is introduced by `silent`; it only controls per-request logging verbosity.
+- Existing request fields remain compatible; clients that do not send `clientName` and `clientPid` still work.
+- When `clientName` or `clientPid` is missing, logs must use `?` for that field.
+
 ---
 
 ## Project Structure
