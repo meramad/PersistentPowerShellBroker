@@ -53,7 +53,7 @@ internal static class ProgramEntry
             return ExitCodeStartupFatal;
         }
 
-        Console.WriteLine("PersistentPowerShellBroker");
+        Console.WriteLine($"PersistentPowerShellBroker v{AppVersion.Value}");
         Console.WriteLine("\u00A9 2026 Mikl\u00F3s Ar\u00E1nyi");
         Console.WriteLine("Experimental local automation tool");
         Console.WriteLine($"PIPE=\\\\.\\pipe\\{options.PipeName}");

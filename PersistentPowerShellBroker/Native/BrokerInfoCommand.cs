@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Text.Json;
+using PersistentPowerShellBroker.Util;
 
 namespace PersistentPowerShellBroker.Native;
 
@@ -9,7 +9,7 @@ public sealed class BrokerInfoCommand : INativeCommand
 
     public Task<NativeResult> ExecuteAsync(JsonElement? args, BrokerContext context, CancellationToken cancellationToken)
     {
-        var version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+        var version = AppVersion.Value;
         var payload = new
         {
             version,
