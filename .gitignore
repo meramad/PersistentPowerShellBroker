@@ -27,3 +27,6 @@ packages/
 
 ## Publish output
 publish/
+
+# Local launch profile
+PersistentPowerShellBroker/Properties/launchSettings.json
