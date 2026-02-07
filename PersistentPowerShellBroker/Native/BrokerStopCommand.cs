@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace PersistentPowerShellBroker.Native;
 
 public sealed class BrokerStopCommand : INativeCommand
