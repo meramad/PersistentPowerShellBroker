@@ -41,7 +41,13 @@ internal static class ProgramEntry
             RequestStop = stopSignal.RequestStop
         };
 
-        var registry = new NativeRegistry([new BrokerInfoCommand(), new BrokerStopCommand()]);
+        var registry = new NativeRegistry(
+        [
+            new BrokerInfoCommand(),
+            new BrokerStopCommand(),
+            new BrokerExcelGetWorkbookHandleCommand(),
+            new BrokerExcelReleaseHandleCommand()
+        ]);
         using var host = new BrokerHost(registry, context, options.InitScriptPath);
         try
         {
