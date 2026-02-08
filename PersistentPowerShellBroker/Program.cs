@@ -45,6 +45,7 @@ internal static class ProgramEntry
         [
             new BrokerInfoCommand(),
             new BrokerStopCommand(),
+            new BrokerHelpCommand(),
             new BrokerExcelGetWorkbookHandleCommand(),
             new BrokerExcelReleaseHandleCommand()
         ]);
