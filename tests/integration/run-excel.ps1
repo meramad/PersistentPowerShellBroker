@@ -70,10 +70,12 @@ function Resolve-RunnerPwsh {
 
 function Wait-BrokerReady {
     param(
+        [string]$HelperPath,
         [string]$PipeName,
         [int]$TimeoutSec
     )
 
+    . $HelperPath
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if ($script:BrokerProcess.HasExited) {
@@ -81,24 +83,9 @@ function Wait-BrokerReady {
         }
 
         try {
-            $request = @{ id = [Guid]::NewGuid().ToString("N"); kind = "native"; command = "broker.info"; clientName = "integration"; clientPid = $PID } | ConvertTo-Json -Compress
-            $client = [System.IO.Pipes.NamedPipeClientStream]::new(".", $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
-            try {
-                $client.Connect(500)
-                $writer = [System.IO.StreamWriter]::new($client, [System.Text.UTF8Encoding]::new($false), 1024, $true)
-                $reader = [System.IO.StreamReader]::new($client, [System.Text.UTF8Encoding]::new($false), $false, 1024, $true)
-                $writer.WriteLine($request)
-                $writer.Flush()
-                $line = $reader.ReadLine()
-                if (-not [string]::IsNullOrWhiteSpace($line)) {
-                    $parsed = $line | ConvertFrom-Json
-                    if ($parsed.success) {
-                        return $true
-                    }
-                }
-            }
-            finally {
-                $client.Dispose()
+            $response = Invoke-PSBroker -PipeName $PipeName -Command "broker.info" -PassThru -TimeoutSeconds 2
+            if ($response.success) {
+                return $true
             }
         }
         catch {
@@ -258,6 +245,10 @@ try {
     }
 
     $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $helperPath = Join-Path $repoRoot "client\Invoke-PSBroker.ps1"
+    if (-not (Test-Path -LiteralPath $helperPath)) {
+        throw "Client helper not found: $helperPath"
+    }
     $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $TempDir))
     New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
 
@@ -294,7 +285,7 @@ try {
         -RedirectStandardOutput $script:BrokerStdOutPath `
         -RedirectStandardError $script:BrokerStdErrPath
 
-    if (-not (Wait-BrokerReady -PipeName $pipeName -TimeoutSec $TimeoutSeconds)) {
+    if (-not (Wait-BrokerReady -HelperPath $helperPath -PipeName $pipeName -TimeoutSec $TimeoutSeconds)) {
         $failed = $true
         $failureName = "TC2 Start broker"
         $failureReason = "Broker did not become reachable within timeout."
@@ -307,6 +298,8 @@ param(
     [Parameter(Mandatory=`$true)]
     [string]`$PipeName,
     [Parameter(Mandatory=`$true)]
+    [string]`$HelperPath,
+    [Parameter(Mandatory=`$true)]
     [string]`$WorkbookPath,
     [Parameter(Mandatory=`$true)]
     [int]`$TimeoutSeconds
@@ -314,6 +307,7 @@ param(
 
 Set-StrictMode -Version Latest
 `$ErrorActionPreference = "Stop"
+. `$HelperPath
 
 function Pass([string]`$Name) {
     Write-Output "PASS `$Name"
@@ -322,44 +316,6 @@ function Pass([string]`$Name) {
 function Fail([string]`$Name, [string]`$Reason) {
     [Console]::Error.WriteLine(("FAIL {0}: {1}" -f `$Name, `$Reason))
     exit 1
-}
-
-function Send-BrokerRequest {
-    param(
-        [string]`$Kind,
-        [string]`$Command,
-        [object]`$RequestArgs
-    )
-
-    `$payload = [ordered]@{
-        id = [Guid]::NewGuid().ToString("N")
-        kind = `$Kind
-        command = `$Command
-        clientName = "integration-excel"
-        clientPid = `$PID
-    }
-    if (`$null -ne `$RequestArgs) {
-        `$payload.args = `$RequestArgs
-    }
-
-    `$json = `$payload | ConvertTo-Json -Compress -Depth 20
-    `$client = [System.IO.Pipes.NamedPipeClientStream]::new(".", `$PipeName, [System.IO.Pipes.PipeDirection]::InOut)
-    try {
-        `$client.Connect(5000)
-        `$writer = [System.IO.StreamWriter]::new(`$client, [System.Text.UTF8Encoding]::new(`$false), 1024, `$true)
-        `$reader = [System.IO.StreamReader]::new(`$client, [System.Text.UTF8Encoding]::new(`$false), `$false, 1024, `$true)
-        `$writer.WriteLine(`$json)
-        `$writer.Flush()
-        `$line = `$reader.ReadLine()
-        if ([string]::IsNullOrWhiteSpace(`$line)) {
-            throw "Broker returned empty response."
-        }
-
-        return (`$line | ConvertFrom-Json)
-    }
-    finally {
-        `$client.Dispose()
-    }
 }
 
 function Parse-NativePayload {
@@ -378,7 +334,7 @@ function Probe-HandleVariable {
     `$commandTemplate = '`$var = Get-Variable -Name ''__VAR_NAME__'' -Scope Global -ErrorAction SilentlyContinue; if (`$null -eq `$var) { @{ exists = `$false } | ConvertTo-Json -Compress } else { @{ exists = `$true; hasApplication = (`$null -ne `$var.Value.Application); hasWorkbook = (`$null -ne `$var.Value.Workbook); requestedTarget = [string]`$var.Value.Metadata.RequestedTarget; workbookFullName = [string]`$var.Value.Workbook.FullName } | ConvertTo-Json -Compress }'
     `$command = `$commandTemplate.Replace('__VAR_NAME__', `$escapedName)
 
-    `$probeResp = Send-BrokerRequest -Kind "powershell" -Command `$command -RequestArgs `$null
+    `$probeResp = Invoke-PSBroker -PipeName `$PipeName -Script `$command -PassThru -TimeoutSeconds `$TimeoutSeconds
     if (-not `$probeResp.success) {
         throw ("Probe command failed. error={0} stderr={1}" -f `$probeResp.error, `$probeResp.stderr)
     }
@@ -391,13 +347,13 @@ try {
     `$externalExcel = `$null
     `$externalWorkbook = `$null
 
-    `$get1Resp = Send-BrokerRequest -Kind "native" -Command "broker.excel.get_workbook_handle" -RequestArgs @{
+    `$get1Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.get_workbook_handle" -Args @{
         path = `$absolutePath
         instancePolicy = "AlwaysNew"
         timeoutSeconds = `$TimeoutSeconds
         forceVisible = `$true
         displayAlerts = `$false
-    }
+    } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$get1 = Parse-NativePayload -BrokerResponse `$get1Resp
     if (-not `$get1.ok -or `$get1.status -ne "Success") {
         Fail "TC3 get_workbook_handle not-open" "Command returned non-success payload."
@@ -425,7 +381,7 @@ try {
     }
     Pass "TC4 probe variable bundle"
 
-    `$release1Resp = Send-BrokerRequest -Kind "native" -Command "broker.excel.release_handle" -RequestArgs @{
+    `$release1Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.release_handle" -Args @{
         psVariableName = `$get1.psVariableName
         closeWorkbook = `$true
         saveChanges = `$false
@@ -433,7 +389,7 @@ try {
         onlyIfNoOtherWorkbooks = `$true
         timeoutSeconds = `$TimeoutSeconds
         displayAlerts = `$false
-    }
+    } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$release1 = Parse-NativePayload -BrokerResponse `$release1Resp
     if (-not `$release1.ok -or `$release1.status -ne "Success" -or -not `$release1.released) {
         Fail "TC4b release first handle" "First release failed."
@@ -453,13 +409,13 @@ try {
     }
     Pass "TC5 Prepare already-open workbook"
 
-    `$get2Resp = Send-BrokerRequest -Kind "native" -Command "broker.excel.get_workbook_handle" -RequestArgs @{
+    `$get2Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.get_workbook_handle" -Args @{
         path = `$absolutePath
         instancePolicy = "ReuseIfRunning"
         timeoutSeconds = `$TimeoutSeconds
         forceVisible = `$true
         displayAlerts = `$false
-    }
+    } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$get2 = Parse-NativePayload -BrokerResponse `$get2Resp
     if (-not `$get2.ok -or `$get2.status -ne "Success") {
         Fail "TC5 get_workbook_handle already-open" "Command returned non-success payload."
@@ -475,7 +431,7 @@ try {
     }
     Pass "TC5 get_workbook_handle already-open"
 
-    `$release2Resp = Send-BrokerRequest -Kind "native" -Command "broker.excel.release_handle" -RequestArgs @{
+    `$release2Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.release_handle" -Args @{
         psVariableName = `$get2.psVariableName
         closeWorkbook = `$true
         saveChanges = `$false
@@ -483,7 +439,7 @@ try {
         onlyIfNoOtherWorkbooks = `$true
         timeoutSeconds = `$TimeoutSeconds
         displayAlerts = `$false
-    }
+    } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$release2 = Parse-NativePayload -BrokerResponse `$release2Resp
     if (-not `$release2.ok -or `$release2.status -ne "Success" -or -not `$release2.released) {
         Fail "TC6 release_handle cleanup" "release_handle returned non-success."
@@ -499,7 +455,7 @@ try {
     }
     Pass "TC7 variable removed"
 
-    `$stopResp = Send-BrokerRequest -Kind "native" -Command "broker.stop" -RequestArgs `$null
+    `$stopResp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.stop" -PassThru -TimeoutSeconds `$TimeoutSeconds
     if (-not `$stopResp.success) {
         Fail "TC8 broker.stop" "broker.stop returned non-success."
     }
@@ -528,7 +484,7 @@ exit 0
     Set-Content -LiteralPath $script:ClientScriptPath -Value $clientScript -Encoding UTF8
     $pwshPath = Resolve-RunnerPwsh
     $script:ClientProcess = Start-Process -FilePath $pwshPath `
-        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:ClientScriptPath, "-PipeName", $pipeName, "-WorkbookPath", $script:WorkbookPath, "-TimeoutSeconds", $TimeoutSeconds) `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:ClientScriptPath, "-PipeName", $pipeName, "-HelperPath", $helperPath, "-WorkbookPath", $script:WorkbookPath, "-TimeoutSeconds", $TimeoutSeconds) `
         -PassThru `
         -Wait `
         -RedirectStandardOutput $script:ClientStdOutPath `

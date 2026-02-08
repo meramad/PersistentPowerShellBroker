@@ -77,8 +77,8 @@ function Wait-BrokerReady {
         }
 
         try {
-            $response = Invoke-PSBroker -PipeName $Pipe -Kind native -Command "broker.info" -Raw
-            if ($response -and $response.success) {
+            $response = Invoke-PSBroker -PipeName $Pipe -Command "broker.info" -PassThru -TimeoutSeconds 2
+            if ($response.success) {
                 return $true
             }
         }
@@ -250,23 +250,23 @@ function Fail([string]`$Name, [string]`$Reason) {
 }
 
 try {
-    `$infoResp = Invoke-PSBroker -PipeName `$PipeName -Kind native -Command "broker.info" -Raw
+    `$infoResp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.info" -PassThru
     if (-not `$infoResp.success) {
         Fail "TC2 Native broker.info" "broker.info returned non-success."
     }
 
-    `$info = `$infoResp.stdout | ConvertFrom-Json
+    `$info = `$infoResp.payload
     if ([string]::IsNullOrWhiteSpace(`$info.version) -or [string]::IsNullOrWhiteSpace(`$info.pipeName)) {
         Fail "TC2 Native broker.info" "Missing required info fields."
     }
     Pass "TC2 Native broker.info"
 
-    `$helpResp = Invoke-PSBroker -PipeName `$PipeName -Kind native -Command "broker.help" -Raw
+    `$helpResp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.help" -PassThru
     if (-not `$helpResp.success) {
         Fail "TC3 Native broker.help" "broker.help returned non-success."
     }
 
-    `$help = `$helpResp.stdout | ConvertFrom-Json
+    `$help = `$helpResp.payload
     if (-not `$help.ok -or `$help.status -ne "Success") {
         Fail "TC3 Native broker.help" "Unexpected help status."
     }
@@ -279,7 +279,7 @@ try {
     }
     Pass "TC3 Native broker.help"
 
-    `$dateResp = Invoke-PSBroker -PipeName `$PipeName -Kind powershell -Command "Get-Date" -Raw
+    `$dateResp = Invoke-PSBroker -PipeName `$PipeName -Script "Get-Date" -PassThru
     if (-not `$dateResp.success) {
         Fail "TC4 Non-native Get-Date" "Get-Date returned non-success."
     }
@@ -294,7 +294,7 @@ try {
     }
     Pass "TC4 Non-native Get-Date"
 
-    `$stopResp = Invoke-PSBroker -PipeName `$PipeName -Kind native -Command "broker.stop" -Raw
+    `$stopResp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.stop" -PassThru
     if (-not `$stopResp.success) {
         Fail "TC5 Stop request" "broker.stop returned non-success."
     }
