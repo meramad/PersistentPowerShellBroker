@@ -66,7 +66,6 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
         }
 
         var displayAlerts = displayAlertsArg ?? false;
-        var timeout = TimeSpan.FromSeconds(timeoutSeconds);
 
         if (!ExcelCommandSupport.TryGetVariable(runspace, psVariableName, out var variableValue))
         {
@@ -120,42 +119,33 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
         {
             if (closeWorkbook)
             {
-                var closeWorked = ExcelCommandSupport.TryInvokeWithTimeout(
-                    () =>
+                try
+                {
+                    try
                     {
                         ExcelCommandSupport.SetProperty(application, "Visible", true);
-                        if (!displayAlerts)
+                    }
+                    catch
+                    {
+                        // Best effort only.
+                    }
+
+                    if (!displayAlerts)
+                    {
+                        try
                         {
                             ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
                         }
+                        catch
+                        {
+                            // Best effort only.
+                        }
+                    }
 
-                        object? saveFlag = saveChangesArg.HasValue ? saveChangesArg.Value : Type.Missing;
-                        ExcelCommandSupport.InvokeMethod(workbook, "Close", saveFlag);
-                        return true;
-                    },
-                    timeout,
-                    out _,
-                    out var closeError);
-                if (!closeWorked)
-                {
-                    return Task.FromResult(BuildResult(
-                        ok: false,
-                        status: "TimeoutLikelyModalDialog",
-                        psVariableName: psVariableName,
-                        workbookFullName: workbookFullName,
-                        closedWorkbook: false,
-                        quitExcelAttempted: false,
-                        quitExcelSucceeded: false,
-                        quitSkipped: false,
-                        quitSkipReason: null,
-                        released: false,
-                        blockedLikely: true,
-                        blockingHint: "Excel appears blocked by a modal dialog; user action required",
-                        errorCode: "TimeoutLikelyModalDialog",
-                        errorMessage: "Timed out while closing workbook."));
+                    object? saveFlag = saveChangesArg.HasValue ? saveChangesArg.Value : Type.Missing;
+                    ExcelCommandSupport.InvokeMethod(workbook, "Close", saveFlag);
                 }
-
-                if (closeError is not null)
+                catch (Exception closeError)
                 {
                     return Task.FromResult(BuildResult(
                         ok: false,
@@ -195,40 +185,23 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
 
                 if (!quitSkipped)
                 {
-                    var quitWorked = ExcelCommandSupport.TryInvokeWithTimeout(
-                        () =>
+                    try
+                    {
+                        if (!displayAlerts)
                         {
-                            if (!displayAlerts)
+                            try
                             {
                                 ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
                             }
+                            catch
+                            {
+                                // Best effort only.
+                            }
+                        }
 
-                            ExcelCommandSupport.InvokeMethod(application, "Quit");
-                            return true;
-                        },
-                        timeout,
-                        out _,
-                        out var quitError);
-                    if (!quitWorked)
-                    {
-                        return Task.FromResult(BuildResult(
-                            ok: false,
-                            status: "TimeoutLikelyModalDialog",
-                            psVariableName: psVariableName,
-                            workbookFullName: workbookFullName,
-                            closedWorkbook: closedWorkbook,
-                            quitExcelAttempted: true,
-                            quitExcelSucceeded: false,
-                            quitSkipped: false,
-                            quitSkipReason: null,
-                            released: false,
-                            blockedLikely: true,
-                            blockingHint: "Excel appears blocked by a modal dialog; user action required",
-                            errorCode: "TimeoutLikelyModalDialog",
-                            errorMessage: "Timed out while quitting Excel."));
+                        ExcelCommandSupport.InvokeMethod(application, "Quit");
                     }
-
-                    if (quitError is not null)
+                    catch (Exception quitError)
                     {
                         return Task.FromResult(BuildResult(
                             ok: false,

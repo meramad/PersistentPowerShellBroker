@@ -88,7 +88,11 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
         }
 
         var runningApps = ExcelCommandSupport.EnumerateRunningExcelApplications();
-        var match = FindOpenWorkbook(runningApps, requestedTarget, targetIsUrl);
+        var match = FindOpenWorkbook(
+            runningApps,
+            requestedTarget,
+            targetIsUrl,
+            allowFileNameFallback: instancePolicy == ReuseIfRunning);
         if (match.AmbiguousMatches.Count > 1)
         {
             return Task.FromResult(BuildResult(
@@ -143,6 +147,7 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
 
         object? application = null;
         var createdApplication = false;
+        var handleStored = false;
         try
         {
             if (instancePolicy == ReuseIfRunning && runningApps.Count > 0)
@@ -176,40 +181,34 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
 
             if (forceVisible)
             {
-                ExcelCommandSupport.SetProperty(application, "Visible", true);
+                try
+                {
+                    ExcelCommandSupport.SetProperty(application, "Visible", true);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
             }
 
             if (!displayAlerts)
             {
-                ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
+                try
+                {
+                    ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
             }
 
-            var timeout = TimeSpan.FromSeconds(timeoutSeconds);
-            var openWorked = ExcelCommandSupport.TryInvokeWithTimeout(
-                () => OpenWorkbook(application, requestedTarget, readOnly, openPassword, modifyPassword),
-                timeout,
-                out object? workbook,
-                out var openError);
-            if (!openWorked)
+            object? workbook;
+            try
             {
-                return Task.FromResult(BuildResult(
-                    ok: false,
-                    status: "TimeoutLikelyModalDialog",
-                    psVariableName: null,
-                    workbookFullName: null,
-                    requestedTarget: requestedTarget,
-                    attachedExisting: false,
-                    openedWorkbook: false,
-                    excelInstancePolicyUsed: instancePolicy,
-                    isReadOnly: null,
-                    readOnlyReason: null,
-                    blockedLikely: true,
-                    blockingHint: "Excel appears blocked by a modal dialog; user action required",
-                    errorCode: "TimeoutLikelyModalDialog",
-                    errorMessage: "Timed out while opening workbook."));
+                workbook = OpenWorkbook(application, requestedTarget, readOnly, openPassword, modifyPassword);
             }
-
-            if (openError is not null)
+            catch (Exception openError)
             {
                 var mapped = MapOpenException(openError);
                 return Task.FromResult(BuildResult(
@@ -261,6 +260,7 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
                 openedWorkbook: true,
                 instancePolicy);
             ExcelCommandSupport.SetGlobalVariable(runspace, handleName, bundleValue);
+            handleStored = true;
 
             return Task.FromResult(BuildResult(
                 ok: true,
@@ -298,7 +298,7 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
         }
         finally
         {
-            if (createdApplication && application is not null && !ExcelCommandSupport.IsHandleStored(runspace, application))
+            if (createdApplication && application is not null && !handleStored)
             {
                 ExcelCommandSupport.SafeReleaseComObject(application);
             }
@@ -307,31 +307,45 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
 
     private static object? OpenWorkbook(object application, string target, bool readOnly, string? openPassword, string? modifyPassword)
     {
-        var workbooks = ExcelCommandSupport.GetProperty(application, "Workbooks")
-            ?? throw new InvalidOperationException("Excel.Workbooks is unavailable.");
+        dynamic app = application;
+        dynamic workbooks = app.Workbooks;
+        var missing = Type.Missing;
 
         try
         {
-            return ExcelCommandSupport.InvokeMethod(
-                workbooks,
-                "Open",
-                target,
-                Type.Missing,
-                readOnly,
-                Type.Missing,
-                openPassword ?? Type.Missing,
-                modifyPassword ?? Type.Missing);
+            if (readOnly || !string.IsNullOrWhiteSpace(openPassword) || !string.IsNullOrWhiteSpace(modifyPassword))
+            {
+                return workbooks.Open(
+                    target,
+                    missing,
+                    readOnly,
+                    missing,
+                    openPassword ?? missing,
+                    modifyPassword ?? missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing,
+                    missing);
+            }
         }
-        finally
+        catch
         {
-            ExcelCommandSupport.SafeReleaseComObject(workbooks);
+            // Fall back to the minimal, most-compatible signature below.
         }
+
+        return workbooks.Open(target);
     }
 
     private static (object? MatchedApplication, object? MatchedWorkbook, List<string> AmbiguousMatches) FindOpenWorkbook(
         IReadOnlyList<object> applications,
         string requestedTarget,
-        bool targetIsUrl)
+        bool targetIsUrl,
+        bool allowFileNameFallback)
     {
         var exactMatches = new List<(object App, object Workbook, string FullName)>();
         var fileMatches = new List<(object App, object Workbook, string FullName)>();
@@ -339,7 +353,16 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
 
         foreach (var app in applications)
         {
-            var workbooks = ExcelCommandSupport.GetProperty(app, "Workbooks");
+            dynamic? workbooks;
+            try
+            {
+                workbooks = ((dynamic)app).Workbooks;
+            }
+            catch
+            {
+                continue;
+            }
+
             if (workbooks is null)
             {
                 continue;
@@ -347,16 +370,43 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
 
             try
             {
-                var count = Convert.ToInt32(ExcelCommandSupport.GetProperty(workbooks, "Count") ?? 0);
+                int count;
+                try
+                {
+                    count = Convert.ToInt32(workbooks.Count);
+                }
+                catch
+                {
+                    continue;
+                }
+
                 for (var i = 1; i <= count; i++)
                 {
-                    var workbook = ExcelCommandSupport.InvokeMethod(workbooks, "Item", i);
+                    dynamic? workbook;
+                    try
+                    {
+                        workbook = workbooks.Item(i);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
                     if (workbook is null)
                     {
                         continue;
                     }
 
-                    var fullName = Convert.ToString(ExcelCommandSupport.GetProperty(workbook, "FullName")) ?? string.Empty;
+                    string fullName;
+                    try
+                    {
+                        fullName = Convert.ToString(workbook.FullName) ?? string.Empty;
+                    }
+                    catch
+                    {
+                        ExcelCommandSupport.SafeReleaseComObject(workbook);
+                        continue;
+                    }
                     var normalizedWorkbook = ExcelCommandSupport.NormalizeWorkbookName(fullName, targetIsUrl);
                     if (string.Equals(normalizedWorkbook, requestedTarget, targetIsUrl ? StringComparison.OrdinalIgnoreCase : StringComparison.OrdinalIgnoreCase))
                     {
@@ -406,6 +456,16 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
             }
 
             return (null, null, candidates);
+        }
+
+        if (!allowFileNameFallback)
+        {
+            foreach (var match in fileMatches)
+            {
+                ExcelCommandSupport.SafeReleaseComObject(match.Workbook);
+            }
+
+            return (null, null, []);
         }
 
         if (fileMatches.Count == 1)

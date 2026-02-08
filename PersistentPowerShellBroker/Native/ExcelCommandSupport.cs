@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
-using System.Reflection;
+using Microsoft.VisualBasic;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Text.Json;
@@ -162,72 +162,111 @@ internal static class ExcelCommandSupport
     public static List<object> EnumerateRunningExcelApplications()
     {
         var apps = new List<object>();
-        var dedup = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (GetRunningObjectTable(0, out var rotResult) != 0 || rotResult is null)
+        try
         {
-            return apps;
-        }
-
-        rotResult.EnumRunning(out var enumMoniker);
-        if (enumMoniker is null)
-        {
-            return apps;
-        }
-
-        CreateBindCtx(0, out var bindCtx);
-        var monikers = new IMoniker[1];
-        while (enumMoniker.Next(1, monikers, IntPtr.Zero) == 0)
-        {
-            var moniker = monikers[0];
-            if (moniker is null)
+            var hr = GetRunningObjectTable(0, out var rot);
+            if (hr == 0 && rot is not null)
             {
-                continue;
-            }
+                rot.EnumRunning(out var enumMoniker);
+                if (enumMoniker is not null)
+                {
+                    try
+                    {
+                        var monikers = new IMoniker[1];
+                        while (enumMoniker.Next(1, monikers, IntPtr.Zero) == 0)
+                        {
+                            var moniker = monikers[0];
+                            if (moniker is null)
+                            {
+                                continue;
+                            }
 
+                            object? runningObject = null;
+                            object? appCandidate = null;
+                            var appAdded = false;
+
+                            try
+                            {
+                                rot.GetObject(moniker, out runningObject);
+                                if (runningObject is null)
+                                {
+                                    continue;
+                                }
+
+                                appCandidate = TryGetExcelApplicationFromComObject(runningObject);
+                                if (appCandidate is null)
+                                {
+                                    continue;
+                                }
+
+                                var key = BuildComIdentityKey(appCandidate);
+                                if (seen.Add(key))
+                                {
+                                    apps.Add(appCandidate);
+                                    appAdded = true;
+                                }
+                            }
+                            catch
+                            {
+                                // Ignore non-Excel and inaccessible ROT entries.
+                            }
+                            finally
+                            {
+                                if (!appAdded
+                                    && appCandidate is not null
+                                    && !ReferenceEquals(appCandidate, runningObject))
+                                {
+                                    SafeReleaseComObject(appCandidate);
+                                }
+
+                                if (runningObject is not null
+                                    && (!appAdded || !ReferenceEquals(runningObject, appCandidate)))
+                                {
+                                    SafeReleaseComObject(runningObject);
+                                }
+
+                                SafeReleaseComObject(moniker);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        SafeReleaseComObject(enumMoniker);
+                    }
+                }
+
+                SafeReleaseComObject(rot);
+            }
+        }
+        catch
+        {
+            // Continue to active-object fallback below.
+        }
+
+        if (apps.Count == 0)
+        {
             try
             {
-                rotResult.GetObject(moniker, out var candidate);
-                if (candidate is null)
+                var active = GetActiveObjectFromProgId("Excel.Application");
+                if (active is not null)
                 {
-                    continue;
-                }
-
-                var application = TryGetExcelApplicationFromComObject(candidate);
-                if (application is null)
-                {
-                    continue;
-                }
-
-                var key = BuildComIdentityKey(application);
-                if (dedup.Add(key))
-                {
-                    apps.Add(application);
+                    var key = BuildComIdentityKey(active);
+                    if (seen.Add(key))
+                    {
+                        apps.Add(active);
+                    }
+                    else
+                    {
+                        SafeReleaseComObject(active);
+                    }
                 }
             }
-            catch
+            catch (COMException)
             {
-                // Ignore individual ROT enumeration failures and continue.
+                // No active Excel application.
             }
-            finally
-            {
-                Marshal.ReleaseComObject(moniker);
-            }
-        }
-
-        if (bindCtx is not null && Marshal.IsComObject(bindCtx))
-        {
-            Marshal.ReleaseComObject(bindCtx);
-        }
-
-        if (Marshal.IsComObject(enumMoniker))
-        {
-            Marshal.ReleaseComObject(enumMoniker);
-        }
-
-        if (Marshal.IsComObject(rotResult))
-        {
-            Marshal.ReleaseComObject(rotResult);
         }
 
         return apps;
@@ -287,35 +326,17 @@ internal static class ExcelCommandSupport
 
     public static object? GetProperty(object target, string propertyName)
     {
-        return target.GetType().InvokeMember(
-            propertyName,
-            BindingFlags.GetProperty,
-            binder: null,
-            target,
-            args: null,
-            CultureInfo.InvariantCulture);
+        return Interaction.CallByName(target, propertyName, CallType.Get);
     }
 
     public static object? InvokeMethod(object target, string methodName, params object?[]? args)
     {
-        return target.GetType().InvokeMember(
-            methodName,
-            BindingFlags.InvokeMethod,
-            binder: null,
-            target,
-            args ?? [],
-            CultureInfo.InvariantCulture);
+        return Interaction.CallByName(target, methodName, CallType.Method, args ?? []);
     }
 
     public static void SetProperty(object target, string propertyName, object? value)
     {
-        target.GetType().InvokeMember(
-            propertyName,
-            BindingFlags.SetProperty,
-            binder: null,
-            target,
-            [value],
-            CultureInfo.InvariantCulture);
+        Interaction.CallByName(target, propertyName, CallType.Set, value);
     }
 
     public static void SafeReleaseComObject(object? value)
@@ -415,27 +436,20 @@ internal static class ExcelCommandSupport
 
     private static object? TryGetExcelApplicationFromComObject(object candidate)
     {
-        try
+        if (IsExcelApplicationObject(candidate))
         {
-            var workbooks = GetProperty(candidate, "Workbooks");
-            if (workbooks is not null)
-            {
-                SafeReleaseComObject(workbooks);
-                return candidate;
-            }
-        }
-        catch
-        {
-            // Not an application object.
+            return candidate;
         }
 
         try
         {
             var app = GetProperty(candidate, "Application");
-            if (app is not null)
+            if (app is not null && IsExcelApplicationObject(app))
             {
                 return app;
             }
+
+            SafeReleaseComObject(app);
         }
         catch
         {
@@ -458,9 +472,44 @@ internal static class ExcelCommandSupport
         }
     }
 
-    [DllImport("ole32.dll")]
-    private static extern int CreateBindCtx(int reserved, out IBindCtx ppbc);
+    private static bool IsExcelApplicationObject(object candidate)
+    {
+        try
+        {
+            var workbooks = GetProperty(candidate, "Workbooks");
+            var hwnd = GetProperty(candidate, "Hwnd");
+            SafeReleaseComObject(workbooks);
+            return workbooks is not null && hwnd is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static object? GetActiveObjectFromProgId(string progId)
+    {
+        var hr = CLSIDFromProgID(progId, out var clsid);
+        if (hr != 0)
+        {
+            throw new COMException($"CLSIDFromProgID failed for '{progId}'.", hr);
+        }
+
+        hr = GetActiveObject(ref clsid, IntPtr.Zero, out var activeObject);
+        if (hr != 0)
+        {
+            throw new COMException($"GetActiveObject failed for '{progId}'.", hr);
+        }
+
+        return activeObject;
+    }
+
+    [DllImport("oleaut32.dll", PreserveSig = true)]
+    private static extern int GetActiveObject(ref Guid rclsid, IntPtr reserved, [MarshalAs(UnmanagedType.IUnknown)] out object? ppunk);
 
     [DllImport("ole32.dll")]
-    private static extern int GetRunningObjectTable(int reserved, out IRunningObjectTable pprot);
+    private static extern int GetRunningObjectTable(int reserved, out IRunningObjectTable? pprot);
+
+    [DllImport("ole32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CLSIDFromProgID(string lpszProgID, out Guid pclsid);
 }
