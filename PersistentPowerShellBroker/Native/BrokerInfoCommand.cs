@@ -1,3 +1,4 @@
+using System.Management.Automation.Runspaces;
 using System.Text.Json;
 using PersistentPowerShellBroker.Util;
 
@@ -7,7 +8,7 @@ public sealed class BrokerInfoCommand : INativeCommand
 {
     public string Name => "broker.info";
 
-    public Task<NativeResult> ExecuteAsync(JsonElement? args, BrokerContext context, CancellationToken cancellationToken)
+    public Task<NativeResult> ExecuteAsync(JsonElement? args, BrokerContext context, Runspace runspace, CancellationToken cancellationToken)
     {
         var version = AppVersion.Value;
         var payload = new

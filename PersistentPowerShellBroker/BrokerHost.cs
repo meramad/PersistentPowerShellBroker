@@ -165,6 +165,11 @@ public sealed class BrokerHost : IDisposable
 
     private BrokerResponse ExecuteNative(BrokerRequest request, CancellationToken cancellationToken)
     {
+        if (_runspace is null)
+        {
+            throw new InvalidOperationException("Runspace is not initialized.");
+        }
+
         if (!_nativeRegistry.TryGet(request.Command, out var command))
         {
             return new BrokerResponse
@@ -178,7 +183,7 @@ public sealed class BrokerHost : IDisposable
             };
         }
 
-        var result = command.ExecuteAsync(request.Args, _context, cancellationToken).GetAwaiter().GetResult();
+        var result = command.ExecuteAsync(request.Args, _context, _runspace, cancellationToken).GetAwaiter().GetResult();
         return new BrokerResponse
         {
             Id = request.Id,
