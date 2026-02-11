@@ -111,6 +111,10 @@ internal static class ProgramEntry
                     {
                         options.LogLevel = LogLevel.Silent;
                     }
+                    else if (string.Equals(value, "pretty", StringComparison.OrdinalIgnoreCase))
+                    {
+                        options.LogLevel = LogLevel.Pretty;
+                    }
                     else if (string.Equals(value, "info", StringComparison.OrdinalIgnoreCase))
                     {
                         options.LogLevel = LogLevel.Info;
@@ -121,7 +125,7 @@ internal static class ProgramEntry
                     }
                     else
                     {
-                        error = "Invalid --log-option. Use silent, info, or debug.";
+                        error = "Invalid --log-option. Use silent, pretty, info, or debug.";
                         return false;
                     }
 
@@ -156,7 +160,7 @@ internal static class ProgramEntry
     private sealed class ProgramOptions
     {
         public string PipeName { get; set; } = string.Empty;
-        public LogLevel LogLevel { get; set; } = LogLevel.Silent;
+        public LogLevel LogLevel { get; set; } = LogLevel.Pretty;
         public string? InitScriptPath { get; set; }
         public int? IdleExitMinutes { get; set; }
     }

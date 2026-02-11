@@ -194,6 +194,12 @@ public sealed class PipeServer
 
     private void LogRequest(BrokerRequest request, BrokerResponse response)
     {
+        if (_logger.MinimumLevel == LogLevel.Pretty)
+        {
+            _logger.PrettyBlock(PrettyLogFormatter.Format(request, response));
+            return;
+        }
+
         var clientName = string.IsNullOrWhiteSpace(request.ClientName) ? "?" : request.ClientName;
         var clientPid = request.ClientPid?.ToString() ?? "?";
         var commandPreview = EscapeForLog(Truncate(request.Command, PreviewMaxLength));
