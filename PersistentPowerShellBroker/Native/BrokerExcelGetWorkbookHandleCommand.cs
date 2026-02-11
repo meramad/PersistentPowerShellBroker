@@ -1,4 +1,6 @@
 using System.Management.Automation.Runspaces;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace PersistentPowerShellBroker.Native;
@@ -8,6 +10,7 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
     private const string ReuseIfRunning = "ReuseIfRunning";
     private const string AlwaysNew = "AlwaysNew";
     private const int DefaultTimeoutSeconds = 15;
+    private const int RpcCallRejected = unchecked((int)0x80010001);
 
     public string Name => "broker.excel.get_workbook_handle";
 
@@ -203,10 +206,17 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
                 }
             }
 
+            using var watchdog = StartOpenWatchdog(context, timeoutSeconds, requestedTarget);
             object? workbook;
             try
             {
-                workbook = OpenWorkbook(application, requestedTarget, readOnly, openPassword, modifyPassword);
+                workbook = OpenWorkbookWithRetry(
+                    application,
+                    requestedTarget,
+                    readOnly,
+                    openPassword,
+                    modifyPassword,
+                    TimeSpan.FromSeconds(timeoutSeconds));
             }
             catch (Exception openError)
             {
@@ -222,8 +232,8 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
                     excelInstancePolicyUsed: instancePolicy,
                     isReadOnly: null,
                     readOnlyReason: null,
-                    blockedLikely: false,
-                    blockingHint: null,
+                    blockedLikely: mapped.BlockedLikely,
+                    blockingHint: mapped.BlockingHint,
                     errorCode: mapped.ErrorCode,
                     errorMessage: mapped.ErrorMessage));
             }
@@ -339,6 +349,76 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
         }
 
         return workbooks.Open(target);
+    }
+
+    private static object? OpenWorkbookWithRetry(
+        object application,
+        string target,
+        bool readOnly,
+        string? openPassword,
+        string? modifyPassword,
+        TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var attempt = 0;
+        while (true)
+        {
+            try
+            {
+                return OpenWorkbook(application, target, readOnly, openPassword, modifyPassword);
+            }
+            catch (COMException ex) when (ex.HResult == RpcCallRejected)
+            {
+                attempt++;
+                var delayMs = Math.Min(1000, 50 * attempt);
+                var delay = TimeSpan.FromMilliseconds(delayMs);
+                if (stopwatch.Elapsed + delay >= timeout)
+                {
+                    throw new ComRetryTimeoutException("Excel remained busy and rejected COM calls until timeout.", ex);
+                }
+
+                Thread.Sleep(delay);
+            }
+        }
+    }
+
+    private static CancellationTokenSource StartOpenWatchdog(BrokerContext context, int timeoutSeconds, string requestedTarget)
+    {
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds));
+        var cts = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(timeout, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                Console.Error.WriteLine($"Excel open watchdog timeout after {timeout.TotalSeconds:F0}s for target '{requestedTarget}'. Forcing broker shutdown.");
+            }
+            catch
+            {
+                // Best effort logging only.
+            }
+
+            try
+            {
+                context.RequestStop();
+            }
+            catch
+            {
+                // Stop signal best effort.
+            }
+
+            Environment.Exit(5);
+        });
+
+        return cts;
     }
 
     private static (object? MatchedApplication, object? MatchedWorkbook, List<string> AmbiguousMatches) FindOpenWorkbook(
@@ -482,25 +562,40 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
         return (null, null, ambiguous);
     }
 
-    private static (string Status, string ErrorCode, string ErrorMessage) MapOpenException(Exception ex)
+    private static (string Status, string ErrorCode, string ErrorMessage, bool BlockedLikely, string? BlockingHint) MapOpenException(Exception ex)
     {
+        if (ex is ComRetryTimeoutException)
+        {
+            return ("ComBusyRetryTimeout", "ComBusyRetryTimeout", ex.Message, true, "Excel was busy and kept rejecting calls.");
+        }
+
+        if (ex is COMException comEx && comEx.HResult == RpcCallRejected)
+        {
+            return ("ComCallRejected", "ComCallRejected", ex.Message, true, "Excel rejected the call while busy.");
+        }
+
+        if (ex is TimeoutException)
+        {
+            return ("CommandTimeout", "CommandTimeout", ex.Message, true, "Operation exceeded command timeout.");
+        }
+
         var text = ex.ToString();
         if (text.Contains("password", StringComparison.OrdinalIgnoreCase))
         {
             if (text.Contains("modify", StringComparison.OrdinalIgnoreCase))
             {
-                return ("ModifyPasswordRequired", "ModifyPasswordRequired", ex.Message);
+                return ("ModifyPasswordRequired", "ModifyPasswordRequired", ex.Message, false, null);
             }
 
             if (text.Contains("required", StringComparison.OrdinalIgnoreCase))
             {
-                return ("PasswordRequired", "PasswordRequired", ex.Message);
+                return ("PasswordRequired", "PasswordRequired", ex.Message, false, null);
             }
 
-            return ("InvalidPassword", "InvalidPassword", ex.Message);
+            return ("InvalidPassword", "InvalidPassword", ex.Message, false, null);
         }
 
-        return ("OpenFailed", "OpenFailed", ex.Message);
+        return ("OpenFailed", "OpenFailed", ex.Message, false, null);
     }
 
     private static bool IsHttpUrl(string value)
@@ -555,5 +650,13 @@ public sealed class BrokerExcelGetWorkbookHandleCommand : INativeCommand
         };
 
         return ExcelCommandSupport.BuildErrorResult(status, errorCode, errorMessage, payload);
+    }
+
+    private sealed class ComRetryTimeoutException : TimeoutException
+    {
+        public ComRetryTimeoutException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
     }
 }
