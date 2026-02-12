@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using PersistentPowerShellBroker.Interop;
 using PersistentPowerShellBroker.Native;
 using PersistentPowerShellBroker.Protocol;
 
@@ -64,8 +65,10 @@ public sealed class BrokerHost : IDisposable
 
     private void WorkerLoop()
     {
+        IDisposable? messageFilterScope = null;
         try
         {
+            messageFilterScope = OleMessageFilter.Register();
             var initialState = InitialSessionState.CreateDefault();
             initialState.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
             _runspace = RunspaceFactory.CreateRunspace(initialState);
@@ -95,50 +98,56 @@ public sealed class BrokerHost : IDisposable
             _startupTcs.TrySetException(ex);
             return;
         }
-
-        foreach (var item in _queue.GetConsumingEnumerable())
+        finally
         {
-            if (item.CancellationToken.IsCancellationRequested)
+            if (_startupTcs.Task.IsCompletedSuccessfully)
             {
-                item.Completion.TrySetCanceled(item.CancellationToken);
-                continue;
+                foreach (var item in _queue.GetConsumingEnumerable())
+                {
+                    if (item.CancellationToken.IsCancellationRequested)
+                    {
+                        item.Completion.TrySetCanceled(item.CancellationToken);
+                        continue;
+                    }
+
+                    var started = Environment.TickCount64;
+                    try
+                    {
+                        var response = ExecuteInternal(item.Request, item.CancellationToken);
+                        var duration = (int)Math.Max(0, Environment.TickCount64 - started);
+                        item.Completion.TrySetResult(new BrokerResponse
+                        {
+                            Id = response.Id,
+                            Success = response.Success,
+                            Stdout = response.Stdout,
+                            Stderr = response.Stderr,
+                            Error = response.Error,
+                            DurationMs = duration
+                        });
+                    }
+                    catch (OperationCanceledException oce)
+                    {
+                        item.Completion.TrySetCanceled(oce.CancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        var duration = (int)Math.Max(0, Environment.TickCount64 - started);
+                        item.Completion.TrySetResult(new BrokerResponse
+                        {
+                            Id = item.Request.Id,
+                            Success = false,
+                            Stdout = string.Empty,
+                            Stderr = string.Empty,
+                            Error = ex.Message,
+                            DurationMs = duration
+                        });
+                    }
+                }
             }
 
-            var started = Environment.TickCount64;
-            try
-            {
-                var response = ExecuteInternal(item.Request, item.CancellationToken);
-                var duration = (int)Math.Max(0, Environment.TickCount64 - started);
-                item.Completion.TrySetResult(new BrokerResponse
-                {
-                    Id = response.Id,
-                    Success = response.Success,
-                    Stdout = response.Stdout,
-                    Stderr = response.Stderr,
-                    Error = response.Error,
-                    DurationMs = duration
-                });
-            }
-            catch (OperationCanceledException oce)
-            {
-                item.Completion.TrySetCanceled(oce.CancellationToken);
-            }
-            catch (Exception ex)
-            {
-                var duration = (int)Math.Max(0, Environment.TickCount64 - started);
-                item.Completion.TrySetResult(new BrokerResponse
-                {
-                    Id = item.Request.Id,
-                    Success = false,
-                    Stdout = string.Empty,
-                    Stderr = string.Empty,
-                    Error = ex.Message,
-                    DurationMs = duration
-                });
-            }
+            _runspace?.Dispose();
+            messageFilterScope?.Dispose();
         }
-
-        _runspace?.Dispose();
     }
 
     private BrokerResponse ExecuteInternal(BrokerRequest request, CancellationToken cancellationToken)
