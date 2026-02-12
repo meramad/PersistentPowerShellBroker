@@ -67,6 +67,7 @@ public sealed class BrokerHost : IDisposable
         try
         {
             var initialState = InitialSessionState.CreateDefault();
+            initialState.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
             _runspace = RunspaceFactory.CreateRunspace(initialState);
             _runspace.Open();
 

@@ -88,6 +88,36 @@ public sealed class BrokerResilienceTests
         Assert.Contains("\"pipeName\":\"test-pipe\"", infoResponse.Stdout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Broker_Runspace_DefaultsToRemoteSignedExecutionPolicy()
+    {
+        var context = new BrokerContext
+        {
+            PipeName = "test-pipe",
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            ProcessId = Environment.ProcessId,
+            RequestStop = static () => { }
+        };
+        var registry = new NativeRegistry(
+        [
+            new BrokerInfoCommand()
+        ]);
+
+        using var host = new BrokerHost(registry, context, initScriptPath: null);
+        await host.StartAsync(CancellationToken.None);
+
+        var policyRequest = new BrokerRequest
+        {
+            Id = "r3",
+            Kind = "powershell",
+            Command = "Get-ExecutionPolicy"
+        };
+
+        var policyResponse = await host.ExecuteAsync(policyRequest, CancellationToken.None);
+        Assert.True(policyResponse.Success);
+        Assert.Contains("RemoteSigned", policyResponse.Stdout, StringComparison.Ordinal);
+    }
+
     private sealed class TimeoutSimulationCommand : INativeCommand
     {
         public string Name => "broker.test.timeout";
