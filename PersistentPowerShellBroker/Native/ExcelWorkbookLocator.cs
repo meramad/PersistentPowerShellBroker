@@ -8,6 +8,7 @@ internal sealed class ExcelWorkbookLocator
         bool allowFileNameFallback)
     {
         var candidates = new List<Candidate>();
+        var discoveryErrors = new List<string>();
         foreach (var app in applications)
         {
             dynamic? workbooks;
@@ -15,8 +16,9 @@ internal sealed class ExcelWorkbookLocator
             {
                 workbooks = ((dynamic)app).Workbooks;
             }
-            catch
+            catch (Exception ex)
             {
+                discoveryErrors.Add($"Failed to access Workbooks collection: {ex.Message}");
                 continue;
             }
 
@@ -32,8 +34,9 @@ internal sealed class ExcelWorkbookLocator
                 {
                     count = Convert.ToInt32(workbooks.Count);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    discoveryErrors.Add($"Failed to read workbook count: {ex.Message}");
                     continue;
                 }
 
@@ -44,8 +47,9 @@ internal sealed class ExcelWorkbookLocator
                     {
                         workbook = workbooks.Item(i);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        discoveryErrors.Add($"Failed to access workbook index {i}: {ex.Message}");
                         continue;
                     }
 
@@ -59,8 +63,9 @@ internal sealed class ExcelWorkbookLocator
                     {
                         fullName = Convert.ToString(workbook.FullName) ?? string.Empty;
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        discoveryErrors.Add($"Failed to read workbook FullName at index {i}: {ex.Message}");
                         ExcelCommandSupport.SafeReleaseComObject(workbook);
                         continue;
                     }
@@ -72,6 +77,11 @@ internal sealed class ExcelWorkbookLocator
             {
                 ExcelCommandSupport.SafeReleaseComObject(workbooks);
             }
+        }
+
+        if (candidates.Count == 0 && discoveryErrors.Count > 0)
+        {
+            throw new InvalidOperationException("Excel workbook discovery failed: " + string.Join(" | ", discoveryErrors.Distinct()));
         }
 
         var match = Match(target, candidates, allowFileNameFallback);

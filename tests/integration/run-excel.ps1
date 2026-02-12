@@ -349,7 +349,6 @@ try {
 
     `$get1Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.get_workbook_handle" -Args @{
         path = `$absolutePath
-        instancePolicy = "AlwaysNew"
         timeoutSeconds = `$TimeoutSeconds
         forceVisible = `$true
         displayAlerts = `$false
@@ -387,7 +386,6 @@ try {
         saveChanges = `$false
         quitExcel = `$true
         onlyIfNoOtherWorkbooks = `$true
-        timeoutSeconds = `$TimeoutSeconds
         displayAlerts = `$false
     } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$release1 = Parse-NativePayload -BrokerResponse `$release1Resp
@@ -411,7 +409,6 @@ try {
 
     `$get2Resp = Invoke-PSBroker -PipeName `$PipeName -Command "broker.excel.get_workbook_handle" -Args @{
         path = `$absolutePath
-        instancePolicy = "ReuseIfRunning"
         timeoutSeconds = `$TimeoutSeconds
         forceVisible = `$true
         displayAlerts = `$false
@@ -437,7 +434,6 @@ try {
         saveChanges = `$false
         quitExcel = `$true
         onlyIfNoOtherWorkbooks = `$true
-        timeoutSeconds = `$TimeoutSeconds
         displayAlerts = `$false
     } -PassThru -TimeoutSeconds `$TimeoutSeconds
     `$release2 = Parse-NativePayload -BrokerResponse `$release2Resp

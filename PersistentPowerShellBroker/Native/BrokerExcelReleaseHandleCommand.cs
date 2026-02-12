@@ -1,4 +1,4 @@
-using System.Management.Automation;
+﻿using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Text.Json;
 
@@ -6,8 +6,6 @@ namespace PersistentPowerShellBroker.Native;
 
 public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
 {
-    private const int DefaultTimeoutSeconds = 10;
-
     public string Name => "broker.excel.release_handle";
 
     public Task<NativeResult> ExecuteAsync(JsonElement? args, BrokerContext context, Runspace runspace, CancellationToken cancellationToken)
@@ -36,7 +34,6 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
             || !ExcelCommandSupport.TryGetBool(args, "saveChanges", out var saveChangesArg)
             || !ExcelCommandSupport.TryGetBool(args, "quitExcel", out var quitExcelArg)
             || !ExcelCommandSupport.TryGetBool(args, "onlyIfNoOtherWorkbooks", out var onlyIfNoOtherArg)
-            || !ExcelCommandSupport.TryGetInt(args, "timeoutSeconds", out var timeoutSecondsArg)
             || !ExcelCommandSupport.TryGetBool(args, "displayAlerts", out var displayAlertsArg))
         {
             return Task.FromResult(BuildResult(
@@ -59,16 +56,11 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
         var closeWorkbook = closeWorkbookArg ?? false;
         var quitExcel = quitExcelArg ?? false;
         var onlyIfNoOtherWorkbooks = onlyIfNoOtherArg ?? true;
-        var timeoutSeconds = timeoutSecondsArg ?? DefaultTimeoutSeconds;
-        if (timeoutSeconds < 1)
-        {
-            timeoutSeconds = DefaultTimeoutSeconds;
-        }
-
         var displayAlerts = displayAlertsArg ?? false;
 
         if (!ExcelCommandSupport.TryGetVariable(runspace, psVariableName, out var variableValue))
         {
+            ExcelHandleRegistry.Remove(psVariableName);
             return Task.FromResult(BuildResult(
                 ok: false,
                 status: "NotFound",
@@ -89,8 +81,19 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
         var bundle = variableValue as PSObject ?? PSObject.AsPSObject(variableValue);
         var application = bundle.Properties["Application"]?.Value;
         var workbook = bundle.Properties["Workbook"]?.Value;
+        if (application is PSObject appPsObject)
+        {
+            application = appPsObject.BaseObject;
+        }
+
+        if (workbook is PSObject workbookPsObject)
+        {
+            workbook = workbookPsObject.BaseObject;
+        }
+
         if (application is null || workbook is null)
         {
+            ExcelHandleRegistry.Remove(psVariableName);
             return Task.FromResult(BuildResult(
                 ok: false,
                 status: "InvalidHandle",
@@ -108,6 +111,9 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
                 errorMessage: "Handle bundle is missing Application or Workbook."));
         }
 
+        ExcelHandleRegistry.TryGet(psVariableName, out var metadata);
+        var session = new ExcelApplicationSession(application, metadata?.CreatedApplicationByBroker ?? false);
+
         var workbookFullName = Convert.ToString(ExcelCommandSupport.GetProperty(workbook, "FullName"));
         var closedWorkbook = false;
         var quitAttempted = false;
@@ -121,25 +127,10 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
             {
                 try
                 {
-                    try
-                    {
-                        ExcelCommandSupport.SetProperty(application, "Visible", true);
-                    }
-                    catch
-                    {
-                        // Best effort only.
-                    }
-
+                    session.EnsureVisible(forceVisible: true, workbook);
                     if (!displayAlerts)
                     {
-                        try
-                        {
-                            ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
-                        }
-                        catch
-                        {
-                            // Best effort only.
-                        }
+                        session.SetDisplayAlerts(enabled: false);
                     }
 
                     object? saveFlag = saveChangesArg.HasValue ? saveChangesArg.Value : Type.Missing;
@@ -170,11 +161,16 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
             if (quitExcel)
             {
                 quitAttempted = true;
-                if (onlyIfNoOtherWorkbooks)
+
+                if (!session.CreatedByBroker)
                 {
-                    var workbooks = ExcelCommandSupport.GetProperty(application, "Workbooks");
-                    var openCount = Convert.ToInt32(ExcelCommandSupport.GetProperty(workbooks!, "Count") ?? 0);
-                    ExcelCommandSupport.SafeReleaseComObject(workbooks);
+                    quitSkipped = true;
+                    quitSkipReason = "NotBrokerOwnedApplication";
+                }
+
+                if (!quitSkipped && onlyIfNoOtherWorkbooks)
+                {
+                    var openCount = session.GetOpenWorkbookCount();
                     var hasOther = closeWorkbook ? openCount > 0 : openCount > 1;
                     if (hasOther)
                     {
@@ -189,17 +185,11 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
                     {
                         if (!displayAlerts)
                         {
-                            try
-                            {
-                                ExcelCommandSupport.SetProperty(application, "DisplayAlerts", false);
-                            }
-                            catch
-                            {
-                                // Best effort only.
-                            }
+                            session.SetDisplayAlerts(enabled: false);
                         }
 
-                        ExcelCommandSupport.InvokeMethod(application, "Quit");
+                        session.Quit();
+                        quitSucceeded = true;
                     }
                     catch (Exception quitError)
                     {
@@ -219,14 +209,13 @@ public sealed class BrokerExcelReleaseHandleCommand : INativeCommand
                             errorCode: "QuitFailed",
                             errorMessage: quitError.Message));
                     }
-
-                    quitSucceeded = true;
                 }
             }
 
             ExcelCommandSupport.RemoveGlobalVariable(runspace, psVariableName);
+            ExcelHandleRegistry.Remove(psVariableName);
             ExcelCommandSupport.SafeReleaseComObject(workbook);
-            ExcelCommandSupport.SafeReleaseComObject(application);
+            session.Release();
 
             return Task.FromResult(BuildResult(
                 ok: true,

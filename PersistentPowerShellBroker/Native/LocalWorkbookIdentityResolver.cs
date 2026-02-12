@@ -87,68 +87,61 @@ internal static class LocalWorkbookIdentityResolver
 
     private static string? TryResolveRemoteUrl(string normalizedLocalPath)
     {
-        try
-        {
-            using var providersKey = Registry.CurrentUser.OpenSubKey(OneDriveProvidersRegistryPath, writable: false);
-            if (providersKey is null)
-            {
-                return null;
-            }
-
-            string? bestMount = null;
-            string? bestUrlNamespace = null;
-            foreach (var childName in providersKey.GetSubKeyNames())
-            {
-                using var child = providersKey.OpenSubKey(childName, writable: false);
-                if (child is null)
-                {
-                    continue;
-                }
-
-                var mountPoint = child.GetValue("MountPoint") as string;
-                var urlNamespace = child.GetValue("UrlNamespace") as string;
-                if (string.IsNullOrWhiteSpace(mountPoint) || string.IsNullOrWhiteSpace(urlNamespace))
-                {
-                    continue;
-                }
-
-                var normalizedMount = NormalizeLocalPathForComparison(mountPoint);
-                if (!IsPathUnderRoot(normalizedLocalPath, normalizedMount))
-                {
-                    continue;
-                }
-
-                if (bestMount is null || normalizedMount.Length > bestMount.Length)
-                {
-                    bestMount = normalizedMount;
-                    bestUrlNamespace = urlNamespace.Trim();
-                }
-            }
-
-            if (bestMount is null || bestUrlNamespace is null)
-            {
-                return null;
-            }
-
-            var relative = normalizedLocalPath.Length == bestMount.Length
-                ? string.Empty
-                : normalizedLocalPath[(bestMount.Length + 1)..];
-            var normalizedRelative = relative.Replace('\\', '/');
-            var encodedRelative = string.Join(
-                "/",
-                normalizedRelative.Split('/', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(Uri.EscapeDataString));
-
-            var baseUrl = bestUrlNamespace.TrimEnd('/');
-            var candidate = string.IsNullOrWhiteSpace(encodedRelative)
-                ? baseUrl
-                : $"{baseUrl}/{encodedRelative}";
-            return NormalizeUrlForComparison(candidate);
-        }
-        catch
+        using var providersKey = Registry.CurrentUser.OpenSubKey(OneDriveProvidersRegistryPath, writable: false);
+        if (providersKey is null)
         {
             return null;
         }
+
+        string? bestMount = null;
+        string? bestUrlNamespace = null;
+        foreach (var childName in providersKey.GetSubKeyNames())
+        {
+            using var child = providersKey.OpenSubKey(childName, writable: false);
+            if (child is null)
+            {
+                continue;
+            }
+
+            var mountPoint = child.GetValue("MountPoint") as string;
+            var urlNamespace = child.GetValue("UrlNamespace") as string;
+            if (string.IsNullOrWhiteSpace(mountPoint) || string.IsNullOrWhiteSpace(urlNamespace))
+            {
+                continue;
+            }
+
+            var normalizedMount = NormalizeLocalPathForComparison(mountPoint);
+            if (!IsPathUnderRoot(normalizedLocalPath, normalizedMount))
+            {
+                continue;
+            }
+
+            if (bestMount is null || normalizedMount.Length > bestMount.Length)
+            {
+                bestMount = normalizedMount;
+                bestUrlNamespace = urlNamespace.Trim();
+            }
+        }
+
+        if (bestMount is null || bestUrlNamespace is null)
+        {
+            return null;
+        }
+
+        var relative = normalizedLocalPath.Length == bestMount.Length
+            ? string.Empty
+            : normalizedLocalPath[(bestMount.Length + 1)..];
+        var normalizedRelative = relative.Replace('\\', '/');
+        var encodedRelative = string.Join(
+            "/",
+            normalizedRelative.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(Uri.EscapeDataString));
+
+        var baseUrl = bestUrlNamespace.TrimEnd('/');
+        var candidate = string.IsNullOrWhiteSpace(encodedRelative)
+            ? baseUrl
+            : $"{baseUrl}/{encodedRelative}";
+        return NormalizeUrlForComparison(candidate);
     }
 
     private static bool IsPathUnderRoot(string fullPath, string rootPath)

@@ -95,7 +95,7 @@ internal static class PrettyLogFormatter
             });
             return true;
         }
-        catch
+        catch (JsonException)
         {
             return false;
         }

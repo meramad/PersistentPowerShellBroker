@@ -127,6 +127,7 @@ public sealed class PipeServer
         }
         catch (OperationCanceledException)
         {
+            _logger.Debug("connection handling canceled");
         }
         catch (Exception ex)
         {
@@ -146,8 +147,9 @@ public sealed class PipeServer
             {
                 await JsonLineCodec.WriteLineAsync(pipeStream, response, cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception writeError)
             {
+                _logger.Error($"request={id} failed to write error response: {writeError.Message}");
             }
         }
         finally
@@ -304,8 +306,9 @@ public sealed class PipeServer
         {
             await task.ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"PipeServer background task failed during shutdown: {ex.Message}");
         }
     }
 }

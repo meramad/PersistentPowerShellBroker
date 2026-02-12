@@ -48,6 +48,7 @@ internal sealed class ExcelWorkbookOpener
         dynamic app = application;
         dynamic workbooks = app.Workbooks;
         var missing = Type.Missing;
+        Exception? fullSignatureError = null;
 
         try
         {
@@ -71,12 +72,26 @@ internal sealed class ExcelWorkbookOpener
                     missing);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fall back to minimal signature.
+            fullSignatureError = ex;
         }
 
-        return workbooks.Open(target);
+        try
+        {
+            return workbooks.Open(target);
+        }
+        catch (Exception minimalSignatureError)
+        {
+            if (fullSignatureError is null)
+            {
+                throw;
+            }
+
+            throw new InvalidOperationException(
+                $"Excel Workbooks.Open failed with both signatures. full='{fullSignatureError.Message}', minimal='{minimalSignatureError.Message}'.",
+                minimalSignatureError);
+        }
     }
 
     internal sealed class ComRetryTimeoutException : TimeoutException

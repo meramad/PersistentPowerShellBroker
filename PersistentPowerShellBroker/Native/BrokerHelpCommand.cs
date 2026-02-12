@@ -244,7 +244,6 @@ internal static class BrokerHelpCatalog
                 new("openPassword", "string|null", false, null, "Open password if required."),
                 new("modifyPassword", "string|null", false, null, "Password to modify if required."),
                 new("timeoutSeconds", "int", false, 15, "Open timeout guard."),
-                new("instancePolicy", "enum(ReuseIfRunning|AlwaysNew)", false, "ReuseIfRunning", "Excel instance reuse policy."),
                 new("displayAlerts", "bool", false, false, "Set Excel DisplayAlerts before open."),
                 new("forceVisible", "bool", false, true, "Set Excel Visible before return.")
             ],
@@ -255,7 +254,8 @@ internal static class BrokerHelpCatalog
                 new("workbookFullName", "string|null", "Resolved workbook fullname."),
                 new("requestedTarget", "string", "Normalized requested target."),
                 new("attachedExisting", "bool", "True when attached to an already-open workbook."),
-                new("openedWorkbook", "bool", "True when opened during this call.")
+                new("openedWorkbook", "bool", "True when opened during this call."),
+                new("createdApplicationByBroker", "bool|null", "True when this handle owns a broker-created Excel application.")
             ],
             [
                 "$req=@{id='1';kind='native';command='broker.excel.get_workbook_handle';args=@{path='C:\\\\Temp\\\\Book1.xlsx'}}|ConvertTo-Json -Compress",
@@ -270,7 +270,6 @@ internal static class BrokerHelpCatalog
                 new("saveChanges", "bool|null", false, null, "Save behavior when closing workbook."),
                 new("quitExcel", "bool", false, false, "Attempt Excel quit after close."),
                 new("onlyIfNoOtherWorkbooks", "bool", false, true, "Skip quit when other workbooks are open."),
-                new("timeoutSeconds", "int", false, 10, "Close and quit timeout guard."),
                 new("displayAlerts", "bool", false, false, "Set DisplayAlerts during close/quit.")
             ],
             [

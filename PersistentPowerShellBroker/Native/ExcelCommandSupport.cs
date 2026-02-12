@@ -136,7 +136,7 @@ internal static class ExcelCommandSupport
         bool isReadOnly,
         bool attachedExisting,
         bool openedWorkbook,
-        string instancePolicyUsed)
+        bool createdApplicationByBroker)
     {
         var metadata = new PSObject();
         metadata.Properties.Add(new PSNoteProperty("RequestedTarget", requestedTarget));
@@ -144,8 +144,8 @@ internal static class ExcelCommandSupport
         metadata.Properties.Add(new PSNoteProperty("IsReadOnly", isReadOnly));
         metadata.Properties.Add(new PSNoteProperty("AttachedExisting", attachedExisting));
         metadata.Properties.Add(new PSNoteProperty("OpenedWorkbook", openedWorkbook));
+        metadata.Properties.Add(new PSNoteProperty("CreatedApplicationByBroker", createdApplicationByBroker));
         metadata.Properties.Add(new PSNoteProperty("CreatedUtc", DateTime.UtcNow));
-        metadata.Properties.Add(new PSNoteProperty("InstancePolicyUsed", instancePolicyUsed));
 
         var bundle = new PSObject();
         bundle.Properties.Add(new PSNoteProperty("Application", application));
@@ -185,8 +185,6 @@ internal static class ExcelCommandSupport
 
                             object? runningObject = null;
                             object? appCandidate = null;
-                            var appAdded = false;
-
                             try
                             {
                                 rot.GetObject(moniker, out runningObject);
@@ -205,7 +203,6 @@ internal static class ExcelCommandSupport
                                 if (seen.Add(key))
                                 {
                                     apps.Add(appCandidate);
-                                    appAdded = true;
                                 }
                             }
                             catch
@@ -214,19 +211,7 @@ internal static class ExcelCommandSupport
                             }
                             finally
                             {
-                                if (!appAdded
-                                    && appCandidate is not null
-                                    && !ReferenceEquals(appCandidate, runningObject))
-                                {
-                                    SafeReleaseComObject(appCandidate);
-                                }
-
-                                if (runningObject is not null
-                                    && (!appAdded || !ReferenceEquals(runningObject, appCandidate)))
-                                {
-                                    SafeReleaseComObject(runningObject);
-                                }
-
+                                // Do not release appCandidate/runningObject here; this can break shared RCWs.
                                 SafeReleaseComObject(moniker);
                             }
                         }
@@ -240,33 +225,9 @@ internal static class ExcelCommandSupport
                 SafeReleaseComObject(rot);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Continue to active-object fallback below.
-        }
-
-        if (apps.Count == 0)
-        {
-            try
-            {
-                var active = GetActiveObjectFromProgId("Excel.Application");
-                if (active is not null)
-                {
-                    var key = BuildComIdentityKey(active);
-                    if (seen.Add(key))
-                    {
-                        apps.Add(active);
-                    }
-                    else
-                    {
-                        SafeReleaseComObject(active);
-                    }
-                }
-            }
-            catch (COMException)
-            {
-                // No active Excel application.
-            }
+            Console.Error.WriteLine($"ROT enumeration failed: {ex.Message}");
         }
 
         return apps;
@@ -350,9 +311,9 @@ internal static class ExcelCommandSupport
         {
             Marshal.FinalReleaseComObject(value);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore release failures in cleanup paths.
+            Console.Error.WriteLine($"COM release failed: {ex.Message}");
         }
     }
 
@@ -387,14 +348,7 @@ internal static class ExcelCommandSupport
             return fullName.Trim();
         }
 
-        try
-        {
-            return Path.GetFullPath(fullName.Trim());
-        }
-        catch
-        {
-            return fullName.Trim();
-        }
+        return Path.GetFullPath(fullName.Trim());
     }
 
     public static string FileNameFromTarget(string target, bool isUrl)
@@ -443,7 +397,8 @@ internal static class ExcelCommandSupport
 
         try
         {
-            var app = GetProperty(candidate, "Application");
+            dynamic dyn = candidate;
+            object? app = dyn.Application;
             if (app is not null && IsExcelApplicationObject(app))
             {
                 return app;
@@ -453,10 +408,26 @@ internal static class ExcelCommandSupport
         }
         catch
         {
-            // Not a workbook object.
+            // Ignore non-Excel objects.
         }
 
         return null;
+    }
+
+    private static bool IsExcelApplicationObject(object candidate)
+    {
+        try
+        {
+            dynamic dyn = candidate;
+            object? workbooks = dyn.Workbooks;
+            var hwnd = dyn.Hwnd;
+            SafeReleaseComObject(workbooks);
+            return workbooks is not null && hwnd is not null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string BuildComIdentityKey(object comObject)
@@ -472,44 +443,6 @@ internal static class ExcelCommandSupport
         }
     }
 
-    private static bool IsExcelApplicationObject(object candidate)
-    {
-        try
-        {
-            var workbooks = GetProperty(candidate, "Workbooks");
-            var hwnd = GetProperty(candidate, "Hwnd");
-            SafeReleaseComObject(workbooks);
-            return workbooks is not null && hwnd is not null;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static object? GetActiveObjectFromProgId(string progId)
-    {
-        var hr = CLSIDFromProgID(progId, out var clsid);
-        if (hr != 0)
-        {
-            throw new COMException($"CLSIDFromProgID failed for '{progId}'.", hr);
-        }
-
-        hr = GetActiveObject(ref clsid, IntPtr.Zero, out var activeObject);
-        if (hr != 0)
-        {
-            throw new COMException($"GetActiveObject failed for '{progId}'.", hr);
-        }
-
-        return activeObject;
-    }
-
-    [DllImport("oleaut32.dll", PreserveSig = true)]
-    private static extern int GetActiveObject(ref Guid rclsid, IntPtr reserved, [MarshalAs(UnmanagedType.IUnknown)] out object? ppunk);
-
     [DllImport("ole32.dll")]
     private static extern int GetRunningObjectTable(int reserved, out IRunningObjectTable? pprot);
-
-    [DllImport("ole32.dll", CharSet = CharSet.Unicode)]
-    private static extern int CLSIDFromProgID(string lpszProgID, out Guid pclsid);
 }
